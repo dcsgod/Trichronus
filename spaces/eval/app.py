@@ -45,26 +45,10 @@ def _load_model_from_hub(repo_id: str) -> "TriChronos":
 
 
 # ---------------------------------------------------------------------------
-# Monash datasets (same list as evaluate.py)
+# Monash datasets — single source of truth in evaluate.py
 # ---------------------------------------------------------------------------
 
-MONASH_DATASETS = [
-    ("monash_tsf_data", "m1_monthly",        12),
-    ("monash_tsf_data", "m1_quarterly",       4),
-    ("monash_tsf_data", "m1_yearly",          1),
-    ("monash_tsf_data", "m3_monthly",        12),
-    ("monash_tsf_data", "m3_quarterly",       4),
-    ("monash_tsf_data", "m3_yearly",          1),
-    ("monash_tsf_data", "m4_monthly",        12),
-    ("monash_tsf_data", "m4_quarterly",       4),
-    ("monash_tsf_data", "m4_yearly",          1),
-    ("monash_tsf_data", "tourism_monthly",   12),
-    ("monash_tsf_data", "tourism_quarterly",  4),
-    ("monash_tsf_data", "tourism_yearly",     1),
-    ("monash_tsf_data", "electricity_hourly",24),
-    ("monash_tsf_data", "traffic_hourly",    24),
-    ("monash_tsf_data", "weather",            1),
-]
+from evaluate import MONASH_DATASETS
 
 
 def _run_eval(
@@ -144,6 +128,13 @@ Runs on CPU — no GPU needed.
         )
         hub_eval_btn = gr.Button("▶ Run Evaluation (from Hub)", variant="primary")
 
+    with gr.Tab("Latest training checkpoint (/data)"):
+        gr.Markdown(
+            "Evaluates the most recent `model_state.pt` synced by the training "
+            "Space to the mounted checkpoint bucket (`/data`). No upload needed."
+        )
+        data_eval_btn = gr.Button("▶ Run Evaluation (/data checkpoint)", variant="primary")
+
     max_series = gr.Slider(
         minimum=10,
         maximum=500,
@@ -191,6 +182,58 @@ Runs on CPU — no GPU needed.
         for rows, status in _run_eval(model, int(max_s)):
             yield rows, status
 
+    CHECKPOINT_BUCKET_ID = os.environ.get(
+        "CHECKPOINT_BUCKET_ID", "iravikr/trichronos-checkpoints"
+    )
+
+    def eval_from_data(max_s: int):
+        # Prefer the mounted /data snapshot; fall back to downloading the
+        # latest checkpoint straight from the dataset repo. The dataset-volume
+        # mount is a point-in-time snapshot and does NOT pick up checkpoints
+        # the training Space pushes after this Space booted, so the download
+        # path is what actually gets the freshest checkpoint.
+        ckpt_path = None
+        step_note = ""
+        mounted = Path("/data/model_state.pt")
+        if mounted.exists():
+            ckpt_path = str(mounted)
+            step_file = Path("/data/step.txt")
+            if step_file.exists():
+                step_note = f" (step {step_file.read_text().strip()}, from /data)"
+        else:
+            yield [], f"⬇️ /data empty — pulling latest checkpoint from `{CHECKPOINT_BUCKET_ID}` …"
+            try:
+                from huggingface_hub import hf_hub_download
+                ckpt_path = hf_hub_download(
+                    repo_id=CHECKPOINT_BUCKET_ID,
+                    filename="model_state.pt",
+                    repo_type="dataset",
+                )
+                try:
+                    step_txt = hf_hub_download(
+                        repo_id=CHECKPOINT_BUCKET_ID,
+                        filename="step.txt",
+                        repo_type="dataset",
+                    )
+                    step_note = f" (step {Path(step_txt).read_text().strip()}, from dataset repo)"
+                except Exception:
+                    step_note = " (from dataset repo)"
+            except Exception as exc:
+                yield [], (
+                    f"⚠️ No checkpoint found. `/data` is empty and downloading "
+                    f"`model_state.pt` from `{CHECKPOINT_BUCKET_ID}` failed: {exc}"
+                )
+                return
+
+        try:
+            model = _load_model(ckpt_path)
+        except Exception as exc:
+            yield [], f"❌ Failed to load checkpoint: {exc}"
+            return
+        yield [], f"✅ Loaded latest checkpoint{step_note}. Evaluating …"
+        for rows, status in _run_eval(model, int(max_s)):
+            yield rows, status
+
     upload_eval_btn.click(
         fn=eval_from_upload,
         inputs=[ckpt_upload, max_series],
@@ -200,6 +243,12 @@ Runs on CPU — no GPU needed.
     hub_eval_btn.click(
         fn=eval_from_hub,
         inputs=[hub_repo, max_series],
+        outputs=[results_table, status_box],
+    )
+
+    data_eval_btn.click(
+        fn=eval_from_data,
+        inputs=[max_series],
         outputs=[results_table, status_box],
     )
 

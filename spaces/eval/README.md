@@ -1,8 +1,8 @@
 ---
 title: TriChronos Eval
 emoji: 📊
-colorFrom: teal
-colorTo: cyan
+colorFrom: green
+colorTo: blue
 sdk: gradio
 sdk_version: 5.34.2
 python_version: "3.11"

@@ -38,17 +38,14 @@ from model import TriChronos, QUANTILE_LEVELS
 # ---------------------------------------------------------------------------
 
 WALL_CLOCK_LIMIT: float = 7 * 3600 + 10 * 60   # 7 h 10 m in seconds
-# Use /data/checkpoints when running in an HF Space (bucket mounted at /data)
-# Fall back to local ./checkpoints for local dev runs.
-_IN_SPACE = bool(os.environ.get("CHECKPOINT_BUCKET_ID"))
-CHECKPOINT_DIR: Path = Path("/data/checkpoints") if _IN_SPACE else Path("checkpoints")
+CHECKPOINT_DIR: Path = Path("checkpoints")
 LOG_EVERY: int = 100                             # log every N steps
-SAVE_EVERY: int = 1_000                          # checkpoint every N steps
+SAVE_EVERY: int = 5_000                          # checkpoint every N steps (fewer 1.2GB uploads = more train time)
 
 DEFAULT_LR: float = 3e-4
 DEFAULT_WEIGHT_DECAY: float = 1e-2
 DEFAULT_WARMUP_STEPS: int = 2_000
-DEFAULT_MAX_STEPS: int = 500_000
+DEFAULT_MAX_STEPS: int = 150_000   # ~one 7h L40S session; lets cosine LR fully anneal within budget
 DEFAULT_BATCH_SIZE: int = 32
 DEFAULT_GRAD_CLIP: float = 1.0
 
@@ -83,7 +80,7 @@ def get_lr(step: int, warmup_steps: int, max_steps: int, max_lr: float) -> float
     """Linear warmup then cosine decay to 10% of peak LR."""
     import math
     if step < warmup_steps:
-        return max_lr * step / max_steps
+        return max_lr * step / max(1, warmup_steps)
     if step >= max_steps:
         return max_lr * 0.1
     progress = (step - warmup_steps) / max(1, max_steps - warmup_steps)
@@ -107,6 +104,23 @@ def save_checkpoint(
     (directory / "step.txt").write_text(f"{step}\n")
     (directory / "loss.txt").write_text(f"{loss:.6f}\n")
     print(f"[step {step}] Checkpoint saved to {directory}", flush=True)
+
+    # Sync checkpoint to HF Dataset repo if bucket ID is configured
+    bucket_id = os.environ.get("CHECKPOINT_BUCKET_ID", "")
+    hf_token = os.environ.get("HF_TOKEN", "")
+    if bucket_id and hf_token:
+        try:
+            from huggingface_hub import HfApi
+            api = HfApi(token=hf_token)
+            api.upload_folder(
+                folder_path=str(directory),
+                repo_id=bucket_id,
+                repo_type="dataset",
+                commit_message=f"Checkpoint step {step} (loss={loss:.4f})",
+            )
+            print(f"[step {step}] Synced checkpoint to HF Dataset {bucket_id}", flush=True)
+        except Exception as exc:
+            print(f"[step {step}] Warning: HF Dataset checkpoint sync failed: {exc}", flush=True)
 
 
 def load_checkpoint(
@@ -134,7 +148,7 @@ def pause_hf_space():
     Pause the Hugging Face Space this script is running in.
     No-op if SPACE_ID is not set (e.g., local runs).
     """
-    space_id = os.environ.get("SPACE_ID", "")
+    space_id = os.environ.get("TRICHRONOS_SPACE_ID", "")
     hf_token = os.environ.get("HF_TOKEN", "")
     if not space_id:
         print("[pause_hf_space] SPACE_ID not set — skipping Space pause.", flush=True)
@@ -194,7 +208,7 @@ def train(args: argparse.Namespace):
     # ---- AMP scaler (for BF16 we don't need GradScaler, but keep for FP16 compat) ----
     use_bf16 = device.type == "cuda" and torch.cuda.is_bf16_supported()
     amp_dtype = torch.bfloat16 if use_bf16 else torch.float16
-    scaler = torch.cuda.amp.GradScaler(enabled=(amp_dtype == torch.float16))
+    scaler = torch.amp.GradScaler("cuda", enabled=(amp_dtype == torch.float16))
 
     # ---- Training state ----
     step = start_step

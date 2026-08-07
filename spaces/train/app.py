@@ -25,14 +25,12 @@ import gradio as gr
 # ---------------------------------------------------------------------------
 
 WALL_CLOCK_LIMIT = 7 * 3600 + 10 * 60   # 7 h 10 m
-HOURLY_COST = 2.50                        # USD/hr for A100
-TOTAL_BUDGET = 18.00                      # USD hard cap
+HOURLY_COST = 1.80                        # USD/hr for 1x L40S (actual Space hardware)
+TOTAL_BUDGET = 15.00                      # USD hard cap
 LOG_TAIL_LINES = 120                      # lines shown in UI
 
-# Use /data (HF bucket mount) when running in a Space; local dir otherwise
-_IN_SPACE = bool(os.environ.get("CHECKPOINT_BUCKET_ID"))
-CHECKPOINT_DIR = Path("/data/checkpoints") if _IN_SPACE else Path("checkpoints")
-LOG_FILE = Path("/data/train.log") if _IN_SPACE else Path("train.log")
+CHECKPOINT_DIR = Path("checkpoints")
+LOG_FILE = Path("train.log")
 
 # ---------------------------------------------------------------------------
 # Global training state (module-level, protected by _lock)
@@ -185,7 +183,7 @@ def get_status() -> tuple[str, str, str, str, str, str]:
 
 def _maybe_autostart():
     """If we're in a real HF Space (SPACE_ID set) and not already running, start training."""
-    if os.environ.get("SPACE_ID") and not _is_running():
+    if os.environ.get("TRICHRONOS_SPACE_ID") and not _is_running():
         time.sleep(3)   # Give Gradio time to fully start
         start_training()
 

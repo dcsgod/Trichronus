@@ -42,39 +42,94 @@ ASINH_SCALE: float = 1.0
 # Bronze — raw streaming from HF
 # ---------------------------------------------------------------------------
 
+LOTSA_REPO: str = "Salesforce/lotsa_data"
+
+
+def list_lotsa_subsets() -> List[str]:
+    """
+    Enumerate every config (subset) name in Salesforce/lotsa_data.
+
+    Streaming the repo with no ``name`` globs arrow files across *all*
+    subsets under one implicit config, forcing HF to infer a single schema
+    for ``target``. Because univariate subsets store ``target`` as
+    ``list<float>`` and multivariate ones as ``list<list<float>>``, the cast
+    fails. Streaming each config by name keeps every arrow file in the stream
+    on a homogeneous schema, so no cross-schema cast is attempted.
+    """
+    from datasets import get_dataset_config_names
+
+    names = get_dataset_config_names(LOTSA_REPO)
+    # "default" (if present) is the union config that triggers the schema
+    # clash — drop it and stream the real subsets instead.
+    return [n for n in names if n != "default"]
+
+
+def _iter_channels(values) -> Iterator[np.ndarray]:
+    """
+    Normalise a raw ``target`` into one or more 1-D float32 series.
+
+    LOTSA ``target`` is either univariate (``list<float>``) or multivariate
+    (``list<list<float>>`` — one inner list per channel). Multivariate series
+    are split into independent univariate channels so the univariate patching
+    downstream stays valid.
+    """
+    if values is None:
+        return
+    arr = np.asarray(values, dtype=np.float32)
+    if arr.ndim == 1:
+        yield arr
+    elif arr.ndim == 2:
+        for channel in arr:            # (n_channels, T) → T-length series each
+            yield np.ascontiguousarray(channel, dtype=np.float32)
+    # anything else (ragged / empty) is silently skipped
+
+
 def _bronze_stream(subset: Optional[str] = None, split: str = "train"):
     """
-    Yield raw examples from Salesforce/lotsa_data.
+    Yield raw examples from Salesforce/lotsa_data for a specific named subset config.
 
     Each example has at least:
-        "target"   : List[float]  — univariate time series values
-        "start"    : str          — ISO-format start timestamp
-
-    The subset name is injected as "subset" to help downstream batching
-    keep related series together (for group attention).
+        "target"   : List[float] or List[List[float]] — univariate or multivariate time series values
+        "start"    : str — ISO-format start timestamp
     """
-    from datasets import load_dataset  # lazy import to keep module importable without datasets
+    from datasets import load_dataset  # lazy import
 
     ds_kwargs: dict = dict(
         path="Salesforce/lotsa_data",
         split=split,
         streaming=True,
-        trust_remote_code=True,
     )
     if subset is not None:
         ds_kwargs["name"] = subset
 
-    dataset = load_dataset(**ds_kwargs)
+    try:
+        dataset = load_dataset(**ds_kwargs)
+    except Exception as exc:
+        print(f"[data_pipeline] Skipping subset '{subset}': {exc}", flush=True)
+        return
 
     for example in dataset:
-        values = example.get("target", [])
-        if values is None or len(values) < MIN_SERIES_LEN:
+        values = example.get("target", None)
+        if values is None:
             continue
-        yield {
-            "values": np.asarray(values, dtype=np.float32),
-            "subset": subset or "unknown",
-            "start": example.get("start", ""),
-        }
+        val_arr = np.asarray(values, dtype=np.float32)
+
+        # Handle 2D multivariate series (channels, timesteps)
+        if val_arr.ndim == 2:
+            for c in range(val_arr.shape[0]):
+                chan = val_arr[c]
+                if len(chan) >= MIN_SERIES_LEN:
+                    yield {
+                        "values": chan,
+                        "subset": subset or "unknown",
+                        "start": example.get("start", ""),
+                    }
+        elif val_arr.ndim == 1 and len(val_arr) >= MIN_SERIES_LEN:
+            yield {
+                "values": val_arr,
+                "subset": subset or "unknown",
+                "start": example.get("start", ""),
+            }
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +205,7 @@ def _gold_patch(
 
 class LOTSAStreamDataset(IterableDataset):
     """
-    PyTorch IterableDataset wrapping the full Bronze→Silver→Gold pipeline.
+    PyTorch IterableDataset wrapping the full Bronze->Silver->Gold pipeline.
 
     Yields dicts:
         "patches"  : FloatTensor (n_patches, patch_size)
@@ -159,7 +214,7 @@ class LOTSAStreamDataset(IterableDataset):
 
     Parameters
     ----------
-    subsets     : list of LOTSA subset names, or None to use all
+    subsets     : list of LOTSA subset names, or None to dynamically discover all
     split       : HF dataset split ("train")
     patch_size  : timesteps per patch
     horizon     : forecast horizon
@@ -175,7 +230,18 @@ class LOTSAStreamDataset(IterableDataset):
         max_patches: Optional[int] = 64,
     ):
         super().__init__()
-        self.subsets = subsets or [None]   # [None] → stream all at once
+        if subsets is None:
+            from datasets import get_dataset_config_names
+            try:
+                all_configs = get_dataset_config_names("Salesforce/lotsa_data")
+                subsets = [c for c in all_configs if c != "default"]
+            except Exception:
+                subsets = [
+                    "m4_monthly", "traffic_hourly", "electricity_hourly",
+                    "solar_power", "weather", "m4_daily", "m4_hourly",
+                    "favorita_sales", "kdd2022", "wind_power"
+                ]
+        self.subsets = subsets
         self.split = split
         self.patch_size = patch_size
         self.horizon = horizon

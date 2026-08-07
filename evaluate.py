@@ -39,23 +39,30 @@ from model import TriChronos, QUANTILE_LEVELS
 # ---------------------------------------------------------------------------
 # Monash datasets to evaluate on
 # ---------------------------------------------------------------------------
-# Each entry: (hf_dataset_name, subset_name_or_None, seasonal_period)
+# We use the Parquet-based `autogluon/chronos_datasets` mirror rather than the
+# original `monash_tsf`, which is a loading-*script* dataset and no longer
+# loads (recent `datasets` versions dropped `trust_remote_code`). The mirror
+# has one "train" split per config, each row = one univariate series in
+# `target`.
+MONASH_REPO: str = "autogluon/chronos_datasets"
+
+# Each entry: (hf_dataset_name, config_name, seasonal_period)
 MONASH_DATASETS: List[Tuple[str, Optional[str], int]] = [
-    ("monash_tsf_data", "m1_monthly",       12),
-    ("monash_tsf_data", "m1_quarterly",      4),
-    ("monash_tsf_data", "m1_yearly",         1),
-    ("monash_tsf_data", "m3_monthly",       12),
-    ("monash_tsf_data", "m3_quarterly",      4),
-    ("monash_tsf_data", "m3_yearly",         1),
-    ("monash_tsf_data", "m4_monthly",       12),
-    ("monash_tsf_data", "m4_quarterly",      4),
-    ("monash_tsf_data", "m4_yearly",         1),
-    ("monash_tsf_data", "tourism_monthly",  12),
-    ("monash_tsf_data", "tourism_quarterly", 4),
-    ("monash_tsf_data", "tourism_yearly",    1),
-    ("monash_tsf_data", "electricity_hourly", 24),
-    ("monash_tsf_data", "traffic_hourly",    24),
-    ("monash_tsf_data", "weather",            1),
+    (MONASH_REPO, "monash_m1_monthly",         12),
+    (MONASH_REPO, "monash_m1_quarterly",        4),
+    (MONASH_REPO, "monash_m1_yearly",           1),
+    (MONASH_REPO, "monash_m3_monthly",         12),
+    (MONASH_REPO, "monash_m3_quarterly",        4),
+    (MONASH_REPO, "monash_m3_yearly",           1),
+    (MONASH_REPO, "m4_monthly",                12),
+    (MONASH_REPO, "m4_quarterly",               4),
+    (MONASH_REPO, "m4_yearly",                  1),
+    (MONASH_REPO, "monash_tourism_monthly",    12),
+    (MONASH_REPO, "monash_tourism_quarterly",   4),
+    (MONASH_REPO, "monash_tourism_yearly",      1),
+    (MONASH_REPO, "monash_electricity_hourly", 24),
+    (MONASH_REPO, "monash_traffic",            24),
+    (MONASH_REPO, "monash_weather",             1),
 ]
 
 # Median is quantile index for τ=0.50
@@ -103,8 +110,8 @@ def evaluate_dataset(
     try:
         ds_kwargs = dict(
             path=ds_name,
-            split="test",
-            trust_remote_code=True,
+            split="train",      # chronos_datasets exposes only a "train" split (full series)
+            streaming=True,      # stream so 48k-series M4 configs don't download in full
         )
         if subset:
             ds_kwargs["name"] = subset

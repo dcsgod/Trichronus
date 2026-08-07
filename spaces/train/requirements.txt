@@ -1,6 +1,7 @@
-# Training Space requirements
-# torch + cuda pre-installed in Docker base image
-
+# Training Space requirements (Gradio SDK — HF manages the environment via this file)
+# CUDA 12.1 torch for A100-large hardware
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch>=2.3.0
 gradio>=4.44.0
 datasets>=2.19.0
 transformers>=4.40.0

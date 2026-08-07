@@ -1,6 +1,7 @@
-# Eval Space requirements
-# torch CPU installed separately in Dockerfile (--index-url cpu wheel)
-
+# Eval Space requirements (Gradio SDK — HF manages the environment via this file)
+# CPU torch — no CUDA needed for eval
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.3.0
 gradio>=4.44.0
 datasets>=2.19.0
 transformers>=4.40.0

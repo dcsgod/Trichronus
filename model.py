@@ -1,11 +1,11 @@
 """
-model.py — TriChronos-0.1B
+model.py — TriChronos-50M
 Encoder-only Transformer for probabilistic time-series forecasting.
 
 Architecture
 ------------
   d_model  = 768
-  n_layers = 14
+  n_layers = 6
   n_heads  = 12
   patch_size = 8
 
@@ -281,22 +281,22 @@ class TriChronos(nn.Module):
     """
     TriChronos-0.1B: encoder-only Transformer for time-series forecasting.
 
-    Config (hand-verified ~100.1M params)
+    Config (hand-verified ~49.9M params)
     --------------------------------------
     d_model   = 768
-    n_layers  = 11
+    n_layers  = 6
     n_heads   = 12
     patch_size = 8
-    ffn_dim   = 2816  (~3.7 × d_model; tuned to hit 100M target)
+    ffn_dim   = 2304  (~3 × d_model; tuned to hit ~50M target)
     """
 
     def __init__(
         self,
         patch_size: int = 8,
         d_model: int = 768,
-        n_layers: int = 11,
+        n_layers: int = 6,
         n_heads: int = 12,
-        ffn_dim: int = 2816,
+        ffn_dim: int = 2304,
         horizon: int = 24,
         dropout: float = 0.1,
         n_quantiles: int = N_QUANTILES,
@@ -387,9 +387,9 @@ if __name__ == "__main__":
 
     model = TriChronos()
     n_params = model.count_params()
-    print(f"TriChronos-0.1B - {n_params:,} trainable parameters")
-    print(f"  Target: ~100,145,912")
-    print(f"  Delta : {abs(n_params - 100_145_912):,}")
+    print(f"TriChronos-50M - {n_params:,} trainable parameters")
+    print(f"  Target: ~49,900,000")
+    print(f"  Delta : {abs(n_params - 49_900_000):,}")
 
     # Synthetic batch
     B, T = 4, 64    # batch=4, 64 patches
