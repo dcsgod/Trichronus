@@ -1,0 +1,12 @@
+# TriChronos-0.1B dependencies
+# PyTorch is pre-installed in the Docker image and the HF Space environment.
+# For local installs, install torch separately first:
+#   pip install torch>=2.3.0 --index-url https://download.pytorch.org/whl/cu121
+
+datasets>=2.19.0
+transformers>=4.40.0
+huggingface_hub>=0.23.0
+numpy>=1.26.0
+pandas>=2.2.0
+scipy>=1.13.0
+tqdm>=4.66.0
